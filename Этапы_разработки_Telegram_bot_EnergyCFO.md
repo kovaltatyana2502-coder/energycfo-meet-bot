@@ -243,6 +243,7 @@ energycfo-meet-bot/
 - Выполнено: `npm.cmd audit`, уязвимостей нет.
 - Выполнено: запуск `node dist/index.js` на порту `3100` и проверка `GET /health`.
 - Выполнено: локальный Git commit `e226f64` с backend-каркасом и документацией; `.env` с token не попал в commit.
+- Выполнено: commit уточнен до `f60bdd5` и отправлен в GitHub-репозиторий `kovaltatyana2502-coder/energycfo-meet-bot`, ветка `main`.
 
 ## 4. Этап настройки сервера
 
