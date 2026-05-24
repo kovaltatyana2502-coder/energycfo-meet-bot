@@ -18,3 +18,10 @@ export const adminMenuKeyboard = () =>
     ["Назад"]
   ]).resize();
 
+export const consentKeyboard = () => Markup.keyboard([["Согласен и продолжить"], ["Не согласен"]]).resize();
+
+export const topicKeyboard = () =>
+  Markup.keyboard([["Корпоративные функции", "Тарифная кампания"], ["Комплексный подход", "Другое"], ["Отменить"]]).resize();
+
+export const contactChannelKeyboard = () =>
+  Markup.keyboard([["Telegram", "Email"], ["Телефон", "WhatsApp"], ["Другое"], ["Отменить"]]).resize();

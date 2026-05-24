@@ -108,9 +108,27 @@ model User {
   contactPreferences ContactPreference[]
   meetingRequests    MeetingRequest[]
   meetings           Meeting[]
+  botSessions        BotSession[]
 
   @@index([email])
   @@map("users")
+}
+
+model BotSession {
+  id                     String   @id @default(uuid())
+  telegramId             String   @unique @map("telegram_id")
+  userId                 String?  @map("user_id")
+  currentStep            String   @map("current_step")
+  activeMeetingRequestId String?  @map("active_meeting_request_id")
+  data                   Json?
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([currentStep])
+  @@map("bot_sessions")
 }
 
 model ContactPreference {
