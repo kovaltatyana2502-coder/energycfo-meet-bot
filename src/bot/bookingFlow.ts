@@ -7,9 +7,27 @@ import {
 } from "@prisma/client";
 import type { Context, Markup } from "telegraf";
 
-import { contactChannelKeyboard, consentKeyboard, mainMenuKeyboard, topicKeyboard } from "./keyboards.js";
+import {
+  bookingConfirmationKeyboard,
+  contactChannelKeyboard,
+  consentKeyboard,
+  dateSelectionKeyboard,
+  mainMenuKeyboard,
+  slotSelectionKeyboard,
+  topicKeyboard
+} from "./keyboards.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
+import {
+  dateKeyFromUtc,
+  formatDateLabel,
+  formatSlotRange,
+  getAvailableDates,
+  getAvailableSlotsForDate,
+  getSchedulingContext,
+  parseDateLabel,
+  type AvailableDate
+} from "../scheduling/availability.js";
 
 type ReplyMarkup = ReturnType<typeof Markup.keyboard>;
 
@@ -29,10 +47,15 @@ type BookingStep =
   | "email"
   | "comment"
   | "contact_channel"
-  | "contact_value";
+  | "contact_value"
+  | "date"
+  | "slot"
+  | "confirm";
 
 type SessionData = {
   pendingContactChannel?: ContactChannel;
+  selectedDate?: string;
+  datePage?: number;
 };
 
 type TopicChoice = {
@@ -53,6 +76,8 @@ const contactChannelChoices = new Map<string, ContactChannel>([
   ["WhatsApp", ContactChannel.WHATSAPP],
   ["Другое", ContactChannel.OTHER]
 ]);
+
+const DATE_PAGE_SIZE = 12;
 
 const statusLabels: Record<MeetingRequestStatus, string> = {
   DRAFT: "Черновик",
@@ -145,6 +170,164 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
       }
     });
 
+  const getSlotsForDate = async (dateISO: string) => {
+    const schedulingContext = await getSchedulingContext(prisma, config);
+
+    return getAvailableSlotsForDate({
+      ...schedulingContext,
+      dateISO
+    });
+  };
+
+  const getDatePage = (dates: AvailableDate[], page: number) => {
+    const lastPage = Math.max(Math.ceil(dates.length / DATE_PAGE_SIZE) - 1, 0);
+    const safePage = Math.min(Math.max(page, 0), lastPage);
+    const startIndex = safePage * DATE_PAGE_SIZE;
+
+    return {
+      safePage,
+      items: dates.slice(startIndex, startIndex + DATE_PAGE_SIZE),
+      hasPreviousPage: safePage > 0,
+      hasNextPage: startIndex + DATE_PAGE_SIZE < dates.length
+    };
+  };
+
+  const showAvailableDates = async (
+    ctx: Context,
+    telegramId: string,
+    userId: string,
+    activeMeetingRequestId: string,
+    page = 0
+  ) => {
+    const schedulingContext = await getSchedulingContext(prisma, config);
+    const dates = getAvailableDates(schedulingContext);
+
+    if (dates.length === 0) {
+      await prisma.botSession.deleteMany({ where: { activeMeetingRequestId } });
+      await reply(
+        ctx,
+        [
+          "Сейчас нет доступных дат для записи на ближайшие 2 месяца.",
+          "",
+          "Черновик заявки сохранен. Попробуйте выбрать время позже или свяжитесь напрямую по каналу, где получили ссылку на бота."
+        ].join("\n"),
+        mainMenuKeyboard(isAdmin(ctx))
+      );
+      return;
+    }
+
+    const datePage = getDatePage(dates, page);
+    await setSession(telegramId, userId, "date", activeMeetingRequestId, { datePage: datePage.safePage });
+
+    await reply(
+      ctx,
+      [
+        "Выберите дату встречи.",
+        "",
+        "Показываются доступные даты на ближайшие 2 месяца. Время указано по МСК.",
+        `Показано дат: ${datePage.items.length} из ${dates.length}.`
+      ].join("\n"),
+      dateSelectionKeyboard(
+        datePage.items.map((date) => date.label),
+        {
+          hasPreviousPage: datePage.hasPreviousPage,
+          hasNextPage: datePage.hasNextPage
+        }
+      )
+    );
+  };
+
+  const showSlotsForDate = async (
+    ctx: Context,
+    telegramId: string,
+    userId: string,
+    activeMeetingRequestId: string,
+    dateISO: string,
+    datePage = 0
+  ) => {
+    const schedulingContext = await getSchedulingContext(prisma, config);
+    const slots = getAvailableSlotsForDate({
+      ...schedulingContext,
+      dateISO
+    });
+
+    if (slots.length === 0) {
+      await setSession(telegramId, userId, "date", activeMeetingRequestId, { datePage });
+      await reply(ctx, "На эту дату свободных слотов уже нет. Выберите другую дату.");
+      await showAvailableDates(ctx, telegramId, userId, activeMeetingRequestId, datePage);
+      return;
+    }
+
+    await setSession(telegramId, userId, "slot", activeMeetingRequestId, { selectedDate: dateISO, datePage });
+    await reply(
+      ctx,
+      `Выберите свободное время на ${formatDateLabel(dateISO, schedulingContext.settings.timezone)}.`,
+      slotSelectionKeyboard(slots.map((slot) => slot.startLabel))
+    );
+  };
+
+  const formatContactPreference = (request: Awaited<ReturnType<typeof getActiveRequest>>) => {
+    const contactPreference = request?.contactPreferences.at(0);
+
+    if (!contactPreference) {
+      return "не указан";
+    }
+
+    return `${contactPreference.channel}${contactPreference.value ? `: ${contactPreference.value}` : ""}`;
+  };
+
+  const buildRequestSummaryLines = (request: NonNullable<Awaited<ReturnType<typeof getActiveRequest>>>) => [
+    `Заявка: #${request.requestNumber}`,
+    `Статус: ${statusLabels[request.status]}`,
+    `Тема: ${request.topicText ?? "не указана"}`,
+    `ФИО: ${request.user.fullName ?? "не указано"}`,
+    `Компания: ${request.user.company ?? "не указана"}`,
+    `Должность: ${request.user.position ?? "не указана"}`,
+    `Email: ${request.user.email ?? "не указан"}`,
+    `Способ связи: ${formatContactPreference(request)}`,
+    `Комментарий: ${request.comment ?? "не указан"}`,
+    `Время: ${
+      request.selectedStartAt && request.selectedEndAt
+        ? formatSlotRange(request.selectedStartAt, request.selectedEndAt, request.timezone)
+        : "не выбрано"
+    }`
+  ];
+
+  const showSlotConfirmation = async (ctx: Context, activeMeetingRequestId: string) => {
+    const request = await getActiveRequest(activeMeetingRequestId);
+
+    if (!request) {
+      await reply(ctx, "Черновик заявки не найден. Начните запись заново.", mainMenuKeyboard(isAdmin(ctx)));
+      return;
+    }
+
+    await reply(
+      ctx,
+      ["Проверьте данные заявки перед отправкой на согласование.", "", ...buildRequestSummaryLines(request)].join("\n"),
+      bookingConfirmationKeyboard()
+    );
+  };
+
+  const notifyAdminAboutRequest = async (
+    ctx: Context,
+    request: NonNullable<Awaited<ReturnType<typeof getActiveRequest>>>
+  ) => {
+    if (!config.telegram.adminId || config.telegram.adminId === "replace_me") {
+      return;
+    }
+
+    await ctx.telegram.sendMessage(
+      config.telegram.adminId,
+      [
+        `Новая заявка на встречу #${request.requestNumber}`,
+        "",
+        ...buildRequestSummaryLines(request),
+        "",
+        "Кнопки согласования будут добавлены на следующем этапе админ-сценария."
+      ].join("\n")
+    );
+  };
+
   const start = async (ctx: Context) => {
     const user = await ensureTelegramUser(ctx);
     const telegramId = user.telegramId;
@@ -236,46 +419,15 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
       `#${request.requestNumber}`,
       `Статус: ${statusLabels[request.status]}`,
       `Тема: ${request.topicText ?? "не указана"}`,
+      `Время: ${
+        request.selectedStartAt && request.selectedEndAt
+          ? formatSlotRange(request.selectedStartAt, request.selectedEndAt, request.timezone)
+          : "не выбрано"
+      }`,
       ""
     ]);
 
     await reply(ctx, ["Ваши активные заявки и встречи:", "", ...lines].join("\n").trim(), mainMenuKeyboard(isAdmin(ctx)));
-  };
-
-  const showSummary = async (ctx: Context, activeMeetingRequestId: string) => {
-    const request = await getActiveRequest(activeMeetingRequestId);
-
-    if (!request) {
-      await reply(ctx, "Черновик заявки не найден. Начните запись заново.", mainMenuKeyboard(isAdmin(ctx)));
-      return;
-    }
-
-    const contactPreference = request.contactPreferences.at(0);
-    const contactText = contactPreference
-      ? `${contactPreference.channel}${contactPreference.value ? `: ${contactPreference.value}` : ""}`
-      : "не указан";
-
-    await prisma.botSession.deleteMany({ where: { activeMeetingRequestId } });
-
-    await reply(
-      ctx,
-      [
-        "Данные заявки сохранены.",
-        "",
-        `Заявка: #${request.requestNumber}`,
-        `Статус: ${statusLabels[request.status]}`,
-        `Тема: ${request.topicText ?? "не указана"}`,
-        `ФИО: ${request.user.fullName ?? "не указано"}`,
-        `Компания: ${request.user.company ?? "не указана"}`,
-        `Должность: ${request.user.position ?? "не указана"}`,
-        `Email: ${request.user.email ?? "не указан"}`,
-        `Способ связи: ${contactText}`,
-        `Комментарий: ${request.comment ?? "не указан"}`,
-        "",
-        "Следующий шаг разработки - выбор даты и свободного слота. Пока заявка остается в статусе «Черновик»."
-      ].join("\n"),
-      mainMenuKeyboard(isAdmin(ctx))
-    );
   };
 
   const handleText = async (ctx: TextContext) => {
@@ -463,7 +615,8 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
               reason: "Черновик заявки заполнен до шага выбора слота"
             }
           });
-          await showSummary(ctx, activeMeetingRequestId);
+          await reply(ctx, "Данные заявки сохранены. Теперь выберите дату и время встречи.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId);
           return;
         }
 
@@ -512,7 +665,185 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
             reason: "Черновик заявки заполнен до шага выбора слота"
           }
         });
-        await showSummary(ctx, activeMeetingRequestId);
+        await reply(ctx, "Данные заявки сохранены. Теперь выберите дату и время встречи.");
+        await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId);
+        return;
+      }
+
+      case "date": {
+        const currentPage = sessionData.datePage ?? 0;
+
+        if (text === "Показать еще даты") {
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage + 1);
+          return;
+        }
+
+        if (text === "Предыдущие даты") {
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage - 1);
+          return;
+        }
+
+        const schedulingContext = await getSchedulingContext(prisma, config);
+        const dateISO = parseDateLabel(text, schedulingContext.settings.timezone);
+
+        if (!dateISO) {
+          await reply(ctx, "Выберите дату из списка.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        const availableDates = getAvailableDates(schedulingContext);
+        const isDateAvailable = availableDates.some((date) => date.dateISO === dateISO);
+
+        if (!isDateAvailable) {
+          await reply(ctx, "Эта дата уже недоступна. Выберите другую дату.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        await showSlotsForDate(ctx, telegramId, user.id, activeMeetingRequestId, dateISO, currentPage);
+        return;
+      }
+
+      case "slot": {
+        const selectedDate = sessionData.selectedDate;
+        const currentPage = sessionData.datePage ?? 0;
+
+        if (text === "Выбрать другую дату") {
+          await prisma.meetingRequest.update({
+            where: { id: activeMeetingRequestId },
+            data: {
+              selectedStartAt: null,
+              selectedEndAt: null
+            }
+          });
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        if (!selectedDate) {
+          await reply(ctx, "Дата не выбрана. Выберите дату встречи.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        const schedulingContext = await getSchedulingContext(prisma, config);
+        const slots = getAvailableSlotsForDate({
+          ...schedulingContext,
+          dateISO: selectedDate
+        });
+        const slot = slots.find((availableSlot) => availableSlot.startLabel === text || availableSlot.label === text);
+
+        if (!slot) {
+          await reply(ctx, "Этот слот уже недоступен. Пожалуйста, выберите другое время.");
+          await showSlotsForDate(ctx, telegramId, user.id, activeMeetingRequestId, selectedDate, currentPage);
+          return;
+        }
+
+        await prisma.meetingRequest.update({
+          where: { id: activeMeetingRequestId },
+          data: {
+            selectedStartAt: slot.startAtUtc,
+            selectedEndAt: slot.endAtUtc,
+            timezone: schedulingContext.settings.timezone
+          }
+        });
+        await setSession(telegramId, user.id, "confirm", activeMeetingRequestId, {
+          selectedDate,
+          datePage: currentPage
+        });
+        await showSlotConfirmation(ctx, activeMeetingRequestId);
+        return;
+      }
+
+      case "confirm": {
+        const currentPage = sessionData.datePage ?? 0;
+
+        if (text === "Выбрать другое время") {
+          await prisma.meetingRequest.update({
+            where: { id: activeMeetingRequestId },
+            data: {
+              selectedStartAt: null,
+              selectedEndAt: null
+            }
+          });
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        if (text !== "Отправить заявку") {
+          await reply(ctx, "Подтвердите отправку заявки или выберите другое время.", bookingConfirmationKeyboard());
+          return;
+        }
+
+        const request = await getActiveRequest(activeMeetingRequestId);
+
+        if (!request?.selectedStartAt || !request.selectedEndAt) {
+          await reply(ctx, "Время встречи не выбрано. Выберите дату и слот.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        const selectedDate = dateKeyFromUtc(request.selectedStartAt, request.timezone);
+        const availableSlots = await getSlotsForDate(selectedDate);
+        const slotStillAvailable = availableSlots.some(
+          (slot) => slot.startAtUtc.getTime() === request.selectedStartAt?.getTime()
+        );
+
+        if (!slotStillAvailable) {
+          await prisma.meetingRequest.update({
+            where: { id: activeMeetingRequestId },
+            data: {
+              selectedStartAt: null,
+              selectedEndAt: null
+            }
+          });
+          await reply(ctx, "Этот слот уже недоступен. Пожалуйста, выберите другое время.");
+          await showAvailableDates(ctx, telegramId, user.id, activeMeetingRequestId, currentPage);
+          return;
+        }
+
+        const submittedRequest = await prisma.$transaction(async (tx) => {
+          const updatedRequest = await tx.meetingRequest.update({
+            where: { id: activeMeetingRequestId },
+            data: {
+              status: MeetingRequestStatus.PENDING_APPROVAL,
+              submittedAt: new Date()
+            },
+            include: {
+              user: true,
+              contactPreferences: true
+            }
+          });
+
+          await tx.statusHistory.create({
+            data: {
+              meetingRequestId: activeMeetingRequestId,
+              oldStatus: request.status,
+              newStatus: MeetingRequestStatus.PENDING_APPROVAL,
+              actorRole: ActorRole.USER,
+              actorTelegramId: telegramId,
+              reason: "Пользователь выбрал слот и отправил заявку на согласование"
+            }
+          });
+
+          await tx.botSession.deleteMany({ where: { activeMeetingRequestId } });
+
+          return updatedRequest;
+        });
+
+        await notifyAdminAboutRequest(ctx, submittedRequest);
+        await reply(
+          ctx,
+          [
+            "Заявка отправлена на согласование.",
+            "",
+            ...buildRequestSummaryLines(submittedRequest),
+            "",
+            "После ручного подтверждения встреча появится в Google Calendar, а ссылка Google Meet придет в Telegram."
+          ].join("\n"),
+          mainMenuKeyboard(isAdmin(ctx))
+        );
         return;
       }
     }
