@@ -107,7 +107,30 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 
 Файл `.env.example` содержит только безопасные заглушки. Реальный `.env` создается локально или на сервере и не коммитится. Telegram token, Google client secret, Google refresh token и пароль БД в Markdown не записываются.
 
-## 7. Что не публиковать
+## 7. База данных и Prisma
+
+Проверка схемы и генерация клиента:
+
+```powershell
+npm.cmd run prisma:validate
+npm.cmd run prisma:generate
+```
+
+Применение миграций после настройки PostgreSQL:
+
+```powershell
+npm.cmd run prisma:migrate:dev
+```
+
+Seed создает базовые настройки доступности. Демо-заявка создается только при явном флаге:
+
+```powershell
+$env:SEED_DEMO_DATA='true'
+npm.cmd run prisma:seed
+Remove-Item Env:SEED_DEMO_DATA
+```
+
+## 8. Что не публиковать
 
 | Данные | Причина |
 |---|---|
@@ -118,7 +141,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 | `.env` | содержит секреты production |
 | Бэкапы БД | могут содержать персональные данные |
 
-## 8. Статус готовности к старту
+## 9. Статус готовности к старту
 
 | Блок | Статус |
 |---|---|
@@ -133,7 +156,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 | Nginx + SSL | этап развертывания |
 | Политика ПДн | отложено |
 
-## 9. Definition of Done для MVP
+## 10. Definition of Done для MVP
 
 MVP считается готовым, если:
 

@@ -7,3 +7,300 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ContactChannel {
+  TELEGRAM
+  EMAIL
+  PHONE
+  WHATSAPP
+  OTHER
+}
+
+enum MeetingTopic {
+  CORPORATE_FUNCTIONS
+  TARIFF_CAMPAIGN
+  INTEGRATED_APPROACH
+  OTHER
+}
+
+enum MeetingRequestKind {
+  INITIAL
+  RESCHEDULE
+}
+
+enum MeetingRequestStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  DECLINED
+  CANCELLED_BY_USER
+  RESCHEDULE_PENDING
+  RESCHEDULED
+  SLA_OVERDUE
+  COMPLETED
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  CANCELLED
+  RESCHEDULED
+  COMPLETED
+}
+
+enum ActorRole {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+enum NotificationChannel {
+  TELEGRAM
+  EMAIL
+  SYSTEM
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum NotificationType {
+  NEW_REQUEST
+  ADMIN_REMINDER_2H
+  ADMIN_REMINDER_12H
+  ADMIN_REMINDER_24H
+  USER_REMINDER_24H
+  USER_REMINDER_1H
+  REQUEST_APPROVED
+  REQUEST_DECLINED
+  REQUEST_AUTO_CANCELLED
+  MEETING_CANCELLED
+  RESCHEDULE_REQUESTED
+  RESCHEDULE_APPROVED
+  RESCHEDULE_DECLINED
+  TECHNICAL_ERROR
+}
+
+enum SystemLogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+model User {
+  id                  String    @id @default(uuid())
+  telegramId          String    @unique @map("telegram_id")
+  telegramUsername    String?   @map("telegram_username")
+  telegramFirstName   String?   @map("telegram_first_name")
+  telegramLastName    String?   @map("telegram_last_name")
+  fullName            String?   @map("full_name")
+  company             String?
+  position            String?
+  email               String?
+  consentGivenAt      DateTime? @map("consent_given_at")
+  deletionRequestedAt DateTime? @map("deletion_requested_at")
+  deletedAt           DateTime? @map("deleted_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  contactPreferences ContactPreference[]
+  meetingRequests    MeetingRequest[]
+  meetings           Meeting[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model ContactPreference {
+  id               String         @id @default(uuid())
+  userId           String?        @map("user_id")
+  meetingRequestId String?        @map("meeting_request_id")
+  channel          ContactChannel
+  value            String?
+  label            String?
+  isPrimary        Boolean        @default(false) @map("is_primary")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  user           User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meetingRequest MeetingRequest? @relation(fields: [meetingRequestId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([meetingRequestId])
+  @@index([channel])
+  @@map("contact_preferences")
+}
+
+model MeetingRequest {
+  id                String               @id @default(uuid())
+  requestNumber     Int                  @unique @default(autoincrement()) @map("request_number")
+  userId            String               @map("user_id")
+  kind              MeetingRequestKind   @default(INITIAL)
+  status            MeetingRequestStatus @default(DRAFT)
+  topic             MeetingTopic?
+  topicText         String?              @map("topic_text")
+  comment           String?              @db.Text
+  selectedStartAt   DateTime?            @map("selected_start_at")
+  selectedEndAt     DateTime?            @map("selected_end_at")
+  timezone          String               @default("Europe/Moscow")
+  declineReason     String?              @db.Text @map("decline_reason")
+  alternativeSlots  Json?                @map("alternative_slots")
+  replacesMeetingId String?              @map("replaces_meeting_id")
+  submittedAt       DateTime?            @map("submitted_at")
+  approvedAt        DateTime?            @map("approved_at")
+  declinedAt        DateTime?            @map("declined_at")
+  cancelledAt       DateTime?            @map("cancelled_at")
+  slaOverdueAt      DateTime?            @map("sla_overdue_at")
+  completedAt       DateTime?            @map("completed_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  replacesMeeting    Meeting?            @relation("RescheduleRequests", fields: [replacesMeetingId], references: [id], onDelete: SetNull)
+  meeting            Meeting?
+  contactPreferences ContactPreference[]
+  statusHistory      StatusHistory[]
+  notifications      NotificationLog[]
+  systemLogs         SystemLog[]
+
+  @@index([userId, createdAt])
+  @@index([status, selectedStartAt])
+  @@index([kind, status])
+  @@map("meeting_requests")
+}
+
+model Meeting {
+  id               String        @id @default(uuid())
+  meetingRequestId String        @unique @map("meeting_request_id")
+  userId           String        @map("user_id")
+  status           MeetingStatus @default(SCHEDULED)
+  startAt          DateTime      @map("start_at")
+  endAt            DateTime      @map("end_at")
+  timezone         String        @default("Europe/Moscow")
+  googleCalendarId String?       @map("google_calendar_id")
+  googleEventId    String?       @unique @map("google_event_id")
+  googleMeetLink   String?       @map("google_meet_link")
+  cancelledAt      DateTime?     @map("cancelled_at")
+  completedAt      DateTime?     @map("completed_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  meetingRequest    MeetingRequest   @relation(fields: [meetingRequestId], references: [id], onDelete: Restrict)
+  user              User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  rescheduleRequests MeetingRequest[] @relation("RescheduleRequests")
+  notifications     NotificationLog[]
+
+  @@index([userId, startAt])
+  @@index([status, startAt])
+  @@map("meetings")
+}
+
+model AvailabilitySettings {
+  id                              String   @id @default(uuid())
+  key                             String   @unique @default("default")
+  timezone                        String   @default("Europe/Moscow")
+  workingDays                     Int[]    @default([1, 2, 3, 4, 5]) @map("working_days")
+  workingHoursStart               String   @default("10:00") @map("working_hours_start")
+  workingHoursEnd                 String   @default("18:00") @map("working_hours_end")
+  meetingDurationMinutes          Int      @default(60) @map("meeting_duration_minutes")
+  meetingBufferMinutes            Int      @default(30) @map("meeting_buffer_minutes")
+  meetingMinLeadHours             Int      @default(12) @map("meeting_min_lead_hours")
+  meetingDailyLimit               Int      @default(5) @map("meeting_daily_limit")
+  userBookingHorizonMonths        Int      @default(2) @map("user_booking_horizon_months")
+  adminAvailabilityHorizonMonths  Int      @default(3) @map("admin_availability_horizon_months")
+  isActive                        Boolean  @default(true) @map("is_active")
+  createdAt                       DateTime @default(now()) @map("created_at")
+  updatedAt                       DateTime @updatedAt @map("updated_at")
+
+  @@map("availability_settings")
+}
+
+model ExcludedDate {
+  id                  String   @id @default(uuid())
+  date                DateTime @db.Date
+  timezone            String   @default("Europe/Moscow")
+  reason              String?
+  createdByTelegramId String?  @map("created_by_telegram_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@unique([date, timezone])
+  @@map("excluded_dates")
+}
+
+model StatusHistory {
+  id                String                @id @default(uuid())
+  meetingRequestId  String                @map("meeting_request_id")
+  oldStatus         MeetingRequestStatus? @map("old_status")
+  newStatus         MeetingRequestStatus  @map("new_status")
+  actorRole         ActorRole             @map("actor_role")
+  actorTelegramId   String?               @map("actor_telegram_id")
+  reason            String?               @db.Text
+  metadata          Json?
+  createdAt         DateTime              @default(now()) @map("created_at")
+
+  meetingRequest MeetingRequest @relation(fields: [meetingRequestId], references: [id], onDelete: Cascade)
+
+  @@index([meetingRequestId, createdAt])
+  @@index([newStatus, createdAt])
+  @@map("status_history")
+}
+
+model GoogleToken {
+  id                     String    @id @default(uuid())
+  providerAccountEmail   String    @unique @map("provider_account_email")
+  accessTokenEncrypted   String?   @db.Text @map("access_token_encrypted")
+  refreshTokenEncrypted  String    @db.Text @map("refresh_token_encrypted")
+  scopes                 String[]  @default([])
+  tokenType              String?   @map("token_type")
+  expiryDate             DateTime? @map("expiry_date")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  @@map("google_tokens")
+}
+
+model NotificationLog {
+  id                  String              @id @default(uuid())
+  meetingRequestId    String?             @map("meeting_request_id")
+  meetingId           String?             @map("meeting_id")
+  type                NotificationType
+  channel             NotificationChannel @default(TELEGRAM)
+  status              NotificationStatus  @default(PENDING)
+  recipientRole       ActorRole           @map("recipient_role")
+  recipientTelegramId String?             @map("recipient_telegram_id")
+  recipientEmail      String?             @map("recipient_email")
+  scheduledFor        DateTime?           @map("scheduled_for")
+  sentAt              DateTime?           @map("sent_at")
+  errorMessage        String?             @db.Text @map("error_message")
+  dedupeKey           String?             @unique @map("dedupe_key")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  meetingRequest MeetingRequest? @relation(fields: [meetingRequestId], references: [id], onDelete: Cascade)
+  meeting        Meeting?        @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingRequestId, type])
+  @@index([meetingId, type])
+  @@index([status, scheduledFor])
+  @@map("notification_log")
+}
+
+model SystemLog {
+  id               String         @id @default(uuid())
+  meetingRequestId String?        @map("meeting_request_id")
+  level            SystemLogLevel
+  module           String
+  action           String?
+  message          String         @db.Text
+  metadata         Json?
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  meetingRequest MeetingRequest? @relation(fields: [meetingRequestId], references: [id], onDelete: SetNull)
+
+  @@index([level, createdAt])
+  @@index([module, createdAt])
+  @@index([meetingRequestId])
+  @@map("system_logs")
+}
