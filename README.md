@@ -92,6 +92,13 @@ npm.cmd run build
 npm.cmd run dev
 ```
 
+Для локальной проверки Telegram-бота в `.env` должен быть включен polling:
+
+```env
+TELEGRAM_RUN_MODE=polling
+TELEGRAM_DROP_PENDING_UPDATES=false
+```
+
 Проверка работоспособности:
 
 ```powershell

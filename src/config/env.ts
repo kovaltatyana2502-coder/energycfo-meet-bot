@@ -17,6 +17,10 @@ const integerList = z
     return parsed;
   });
 
+const booleanString = z
+  .union([z.boolean(), z.enum(["true", "false"])])
+  .transform((value) => value === true || value === "true");
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_NAME: z.string().min(1).default("EnergyCFO Meetings Bot"),
@@ -27,6 +31,8 @@ const envSchema = z.object({
 
   TELEGRAM_BOT_TOKEN: z.string().min(1).default("replace_me"),
   TELEGRAM_ADMIN_ID: z.string().min(1).default("replace_me"),
+  TELEGRAM_RUN_MODE: z.enum(["off", "polling", "webhook"]).default("webhook"),
+  TELEGRAM_DROP_PENDING_UPDATES: booleanString.default(false),
   TELEGRAM_WEBHOOK_PATH: z.string().startsWith("/").default("/webhook"),
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1).default("replace_me"),
 
@@ -76,6 +82,8 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env) => {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
       adminId: parsed.TELEGRAM_ADMIN_ID,
+      runMode: parsed.TELEGRAM_RUN_MODE,
+      dropPendingUpdates: parsed.TELEGRAM_DROP_PENDING_UPDATES,
       webhookPath: parsed.TELEGRAM_WEBHOOK_PATH,
       webhookSecret: parsed.TELEGRAM_WEBHOOK_SECRET
     },
@@ -115,4 +123,5 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env) => {
   };
 };
 
-export const isPlaceholderSecret = (value: string) => value === "replace_me" || value.trim() === "";
+export const isPlaceholderSecret = (value: string) =>
+  value === "replace_me" || value === "PASTE_TELEGRAM_BOT_TOKEN_HERE" || value.trim() === "";

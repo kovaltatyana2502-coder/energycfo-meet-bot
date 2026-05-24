@@ -30,6 +30,8 @@ LOG_LEVEL=info
 # Telegram
 TELEGRAM_BOT_TOKEN=replace_me
 TELEGRAM_ADMIN_ID=replace_me
+TELEGRAM_RUN_MODE=polling
+TELEGRAM_DROP_PENDING_UPDATES=false
 TELEGRAM_WEBHOOK_PATH=/webhook
 TELEGRAM_WEBHOOK_SECRET=replace_me
 
@@ -95,6 +97,8 @@ MIN_FREE_DISK_PERCENT=20
 |---|---|---:|---|
 | `TELEGRAM_BOT_TOKEN` | `replace_me` | да | BotFather |
 | `TELEGRAM_ADMIN_ID` | `123456789` | да | через специального бота или debug-команду |
+| `TELEGRAM_RUN_MODE` | `polling` | да | режим получения обновлений: `polling`, `webhook` или `off` |
+| `TELEGRAM_DROP_PENDING_UPDATES` | `false` | да | сбрасывать ли накопленные обновления при старте polling/webhook |
 | `TELEGRAM_WEBHOOK_PATH` | `/webhook` | да | задается в проекте |
 | `TELEGRAM_WEBHOOK_SECRET` | `replace_me` | желательно | генерируется случайно |
 
@@ -104,6 +108,8 @@ MIN_FREE_DISK_PERCENT=20
 |---|---|
 | Token не публиковать | с ним можно управлять ботом |
 | Admin ID не равен username | нужен числовой Telegram ID |
+| Локально удобен polling | бот получает события напрямую с компьютера разработчика |
+| Production должен работать через webhook | Telegram отправляет события на `https://meet.energycfo.pro/webhook` |
 | Webhook secret | дополнительная защита webhook endpoint |
 | Username бота | можно хранить в документации, это публичное значение |
 
@@ -252,6 +258,8 @@ LOG_LEVEL=info
 
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ADMIN_ID=...
+TELEGRAM_RUN_MODE=webhook
+TELEGRAM_DROP_PENDING_UPDATES=false
 TELEGRAM_WEBHOOK_PATH=/webhook
 TELEGRAM_WEBHOOK_SECRET=...
 
