@@ -335,15 +335,19 @@ nginx -v
 
 ### Статус этапа
 
-Этап завершен для проектирования схемы и подготовки миграции; применение к реальной PostgreSQL будет выполнено после готовности локальной или серверной БД.
+Этап завершен для локальной PostgreSQL-БД.
 
 - [x] Выполнено: описана Prisma-схема MVP.
 - [x] Выполнено: добавлены контролируемые enum-статусы заявок, встреч, уведомлений и журналов.
 - [x] Выполнено: добавлены модели `User`, `ContactPreference`, `MeetingRequest`, `Meeting`, `AvailabilitySettings`, `ExcludedDate`, `StatusHistory`, `GoogleToken`, `NotificationLog`, `SystemLog`.
 - [x] Выполнено: добавлена начальная SQL-миграция `20260524170000_init`.
 - [x] Выполнено: добавлен seed-скрипт для базовых настроек доступности и опциональных demo-данных.
-- [ ] Не выполнено: миграция не применялась к PostgreSQL, потому что локальная БД/Docker в текущей среде не подняты.
-- [ ] Следующее действие: при доступной PostgreSQL выполнить `npm.cmd run prisma:migrate:dev` и `npm.cmd run prisma:seed`.
+- [x] Выполнено: установлен локальный PostgreSQL 17 через `winget`.
+- [x] Выполнено: создана локальная dev-БД `energycfo_bot`.
+- [x] Выполнено: миграция применена к локальной PostgreSQL-БД.
+- [x] Выполнено: seed базовых настроек доступности применен.
+- [ ] Не выполнено: миграция не применялась к production-БД на VPS.
+- [ ] Следующее действие: начать этап 7 - пользовательский сценарий записи с сохранением черновика/заявки в БД.
 
 ### Лог разработки
 
@@ -355,21 +359,29 @@ nginx -v
 - Добавлен `prisma/seed.ts`.
 - В `package.json` добавлены команды `prisma:validate` и `prisma:seed`.
 - README дополнен командами для Prisma.
+- Установлен локальный PostgreSQL 17.
+- Создана локальная dev-БД `energycfo_bot` и применена миграция.
+- Выполнен seed базовых настроек доступности.
 
 Решения:
 - Telegram ID хранится строкой, чтобы не зависеть от ограничений JavaScript number и упростить сравнение с `.env`.
 - Время встреч и выбранных слотов хранится в UTC в полях `DateTime`; пользовательский показ остается в МСК.
 - Google refresh/access token в схеме названы как encrypted-поля, чтобы не закреплять практику хранения открытых OAuth-секретов.
 - Демо-данные seed-скрипта создаются только при `SEED_DEMO_DATA=true`, чтобы не засорять production.
+- Для локальной разработки создан отдельный пользователь БД; строка подключения хранится только в `.env`, который исключен из Git.
 
 Проблемы:
 - Prisma 6.19.3 предупреждает, что `package.json#prisma` будет deprecated в Prisma 7; это не блокирует текущий стек, но при переходе на Prisma 7 нужно вынести seed-конфигурацию в `prisma.config.ts`.
-- Локальная PostgreSQL не проверялась из-за отсутствия Docker/БД в текущей среде.
+- При первом запуске `prisma migrate dev` dev-пользователю БД не хватало права `CREATEDB` для shadow database; право выдано только для локальной dev-БД.
 
 Проверка:
 - Выполнено: `npm.cmd run prisma:validate`.
 - Выполнено: `npm.cmd run prisma:generate`.
 - Выполнено: `npx.cmd prisma migrate diff --from-empty --to-schema-datamodel prisma\schema.prisma --script`.
+- Выполнено: `npm.cmd run prisma:migrate:dev -- --skip-generate`.
+- Выполнено: `npm.cmd run prisma:seed`.
+- Выполнено: `npm.cmd exec prisma migrate status`, база синхронизирована.
+- Контроль БД: 11 таблиц, 1 примененная миграция, 1 строка базовых настроек доступности.
 - Выполнено: отдельная TypeScript-проверка `prisma/seed.ts`.
 - Выполнено: `npm.cmd run typecheck`.
 - Выполнено: `npm.cmd test`.
