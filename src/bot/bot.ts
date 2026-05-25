@@ -1,7 +1,8 @@
 import { Telegraf } from "telegraf";
 
+import { createAdminFlow } from "./adminFlow.js";
 import { createBookingFlow } from "./bookingFlow.js";
-import { adminMenuKeyboard, mainMenuKeyboard } from "./keyboards.js";
+import { mainMenuKeyboard } from "./keyboards.js";
 import { messages } from "./messages.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
@@ -9,6 +10,7 @@ import { prisma } from "../db/prisma.js";
 
 export const createBot = (config: AppConfig, logger: AppLogger) => {
   const bot = new Telegraf(config.telegram.botToken);
+  const adminFlow = createAdminFlow(config, logger, prisma);
   const bookingFlow = createBookingFlow(config, logger, prisma);
 
   bot.start(async (ctx) => {
@@ -25,17 +27,17 @@ export const createBot = (config: AppConfig, logger: AppLogger) => {
   bot.hears("Мои встречи", bookingFlow.myMeetings);
 
   bot.hears("Админ-панель", async (ctx) => {
-    const isAdmin = String(ctx.from?.id) === config.telegram.adminId;
-
-    if (!isAdmin) {
-      await ctx.reply(messages.technicalError);
-      return;
-    }
-
-    await ctx.reply(messages.adminPanel, adminMenuKeyboard());
+    await adminFlow.panel(ctx);
   });
 
-  bot.on("text", bookingFlow.handleText);
+  bot.on("text", async (ctx) => {
+    const textContext = ctx as Parameters<typeof bookingFlow.handleText>[0];
+    const handledByAdmin = await adminFlow.handleText(textContext);
+
+    if (!handledByAdmin) {
+      await bookingFlow.handleText(textContext);
+    }
+  });
 
   bot.catch((error, ctx) => {
     logger.error(

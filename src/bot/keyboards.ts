@@ -65,3 +65,24 @@ export const slotSelectionKeyboard = (slotLabels: string[]) =>
 
 export const bookingConfirmationKeyboard = () =>
   Markup.keyboard([["Отправить заявку"], ["Выбрать другое время"], ["Отменить"]]).resize();
+
+export const adminRequestListKeyboard = (requestNumbers: number[]) =>
+  Markup.keyboard([...toRows(requestNumbers.map((requestNumber) => `Заявка #${requestNumber}`), 2), ["Админ-панель"]]).resize();
+
+export const adminRequestActionsKeyboard = (requestNumber: number) =>
+  Markup.keyboard([
+    [`Согласовать #${requestNumber}`],
+    [`Отклонить #${requestNumber}`],
+    [`Предложить другое время #${requestNumber}`],
+    ["Новые заявки", "Админ-панель"]
+  ]).resize();
+
+export const declineReasonKeyboard = () =>
+  Markup.keyboard([
+    ["Не подходит тема обращения"],
+    ["Недостаточно информации"],
+    ["Нужен другой формат взаимодействия"],
+    ["Нет доступности в выбранный период"],
+    ["Другое"],
+    ["Отменить"]
+  ]).resize();

@@ -8,6 +8,7 @@ import {
 import type { Context, Markup } from "telegraf";
 
 import {
+  adminRequestActionsKeyboard,
   bookingConfirmationKeyboard,
   contactChannelKeyboard,
   consentKeyboard,
@@ -323,8 +324,9 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
         "",
         ...buildRequestSummaryLines(request),
         "",
-        "Кнопки согласования будут добавлены на следующем этапе админ-сценария."
-      ].join("\n")
+        "Выберите действие."
+      ].join("\n"),
+      adminRequestActionsKeyboard(request.requestNumber)
     );
   };
 
