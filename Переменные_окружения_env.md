@@ -48,6 +48,7 @@ GOOGLE_REFRESH_TOKEN=replace_me
 GOOGLE_ADMIN_ACCOUNT=koval.tatyana.2502@gmail.com
 GOOGLE_CALENDAR_ID=replace_me
 GOOGLE_CALENDAR_NAME=Встречи с сайта CFO Energy Advisory
+GOOGLE_FREEBUSY_CALENDAR_IDS=
 
 # Scheduling rules
 WORKING_DAYS=1,2,3,4,5
@@ -179,13 +180,14 @@ MIN_FREE_DISK_PERCENT=20
 | `GOOGLE_ADMIN_ACCOUNT` | `koval.tatyana.2502@gmail.com` | да | аккаунт администратора |
 | `GOOGLE_CALENDAR_ID` | `replace_me` | да | идентификатор календаря встреч |
 | `GOOGLE_CALENDAR_NAME` | `Встречи с сайта CFO Energy Advisory` | да | человекочитаемое название календаря |
+| `GOOGLE_FREEBUSY_CALENDAR_IDS` | `tatyana.koval.2502@gmail.com` | нет | дополнительные календари для проверки занятости через запятую |
 
 ### Правила календаря
 
 | Правило | Значение |
 |---|---|
 | Создавать события | только в календаре встреч |
-| Проверять занятость | основной календарь + календарь встреч |
+| Проверять занятость | основной календарь + календарь встреч + дополнительные календари из `GOOGLE_FREEBUSY_CALENDAR_IDS` |
 | Добавлять пользователя | по email |
 | Создавать Google Meet | при согласовании |
 
@@ -273,6 +275,7 @@ GOOGLE_REFRESH_TOKEN=...
 GOOGLE_ADMIN_ACCOUNT=koval.tatyana.2502@gmail.com
 GOOGLE_CALENDAR_ID=...
 GOOGLE_CALENDAR_NAME=Встречи с сайта CFO Energy Advisory
+GOOGLE_FREEBUSY_CALENDAR_IDS=tatyana.koval.2502@gmail.com
 ```
 
 ## 12. Локальный `.env`

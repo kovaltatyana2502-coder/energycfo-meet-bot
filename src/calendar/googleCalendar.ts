@@ -4,6 +4,7 @@ import { google, calendar_v3 } from "googleapis";
 
 import { isPlaceholderSecret, type AppConfig } from "../config/env.js";
 import { createGoogleOAuthClient } from "./googleOAuth.js";
+import type { BusyInterval } from "../scheduling/availability.js";
 
 export type GoogleCalendarConfig = AppConfig["google"];
 
@@ -34,6 +35,11 @@ export type CreatedCalendarEvent = {
   meetLink: string | null;
 };
 
+export type GoogleBusyRange = {
+  timeMin: Date;
+  timeMax: Date;
+};
+
 const ensureGoogleCalendarConfigured = (config: AppConfig) => {
   if (
     isPlaceholderSecret(config.google.clientId) ||
@@ -43,6 +49,22 @@ const ensureGoogleCalendarConfigured = (config: AppConfig) => {
   ) {
     throw new Error("Google Calendar is not configured");
   }
+};
+
+export const isGoogleCalendarConfigured = (config: AppConfig) =>
+  !(
+    isPlaceholderSecret(config.google.clientId) ||
+    isPlaceholderSecret(config.google.clientSecret) ||
+    isPlaceholderSecret(config.google.refreshToken) ||
+    isPlaceholderSecret(config.google.calendarId)
+  );
+
+export const getFreeBusyCalendarIds = (config: AppConfig) => {
+  const calendarIds = ["primary", config.google.calendarId, ...config.google.freebusyCalendarIds].filter(
+    (calendarId) => !isPlaceholderSecret(calendarId)
+  );
+
+  return [...new Set(calendarIds)];
 };
 
 const createCalendarClient = (config: AppConfig) => {
@@ -155,4 +177,43 @@ export const createCalendarMeetingEvent = async (
     htmlLink: event.htmlLink ?? null,
     meetLink: extractMeetLink(event)
   };
+};
+
+export const getGoogleCalendarBusyIntervals = async (
+  config: AppConfig,
+  range: GoogleBusyRange
+): Promise<BusyInterval[]> => {
+  const calendar = createCalendarClient(config);
+  const calendarIds = getFreeBusyCalendarIds(config);
+  const response = await calendar.freebusy.query({
+    requestBody: {
+      timeMin: range.timeMin.toISOString(),
+      timeMax: range.timeMax.toISOString(),
+      timeZone: config.app.timezone,
+      items: calendarIds.map((id) => ({ id }))
+    }
+  });
+  const busy = Object.values(response.data.calendars ?? {}).flatMap((calendarData) => calendarData.busy ?? []);
+  const seenIntervals = new Set<string>();
+
+  return busy.flatMap((interval) => {
+    if (!interval.start || !interval.end) {
+      return [];
+    }
+
+    const intervalKey = `${interval.start}-${interval.end}`;
+
+    if (seenIntervals.has(intervalKey)) {
+      return [];
+    }
+
+    seenIntervals.add(intervalKey);
+
+    return [
+      {
+        startAt: new Date(interval.start),
+        endAt: new Date(interval.end)
+      }
+    ];
+  });
 };

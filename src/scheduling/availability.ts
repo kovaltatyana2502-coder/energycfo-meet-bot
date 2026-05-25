@@ -1,6 +1,7 @@
 import { MeetingRequestStatus, MeetingStatus, type PrismaClient } from "@prisma/client";
 import { DateTime } from "luxon";
 
+import { getGoogleCalendarBusyIntervals, isGoogleCalendarConfigured } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 
 const SLOT_STEP_MINUTES = 30;
@@ -321,11 +322,17 @@ export const getSchedulingContext = async (
     startAt: meeting.startAt,
     endAt: meeting.endAt
   }));
+  const googleBusyIntervals = isGoogleCalendarConfigured(config)
+    ? await getGoogleCalendarBusyIntervals(config, {
+        timeMin: rangeStartUtc,
+        timeMax: rangeEndUtc
+      })
+    : [];
 
   return {
     settings,
     now,
     excludedDateKeys: new Set(excludedDates.map((date) => dateKeyFromDbDate(date.date))),
-    busyIntervals: [...requestIntervals, ...meetingIntervals, ...externalBusyIntervals]
+    busyIntervals: [...requestIntervals, ...meetingIntervals, ...googleBusyIntervals, ...externalBusyIntervals]
   };
 };

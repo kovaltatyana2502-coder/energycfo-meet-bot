@@ -21,6 +21,11 @@ const booleanString = z
   .union([z.boolean(), z.enum(["true", "false"])])
   .transform((value) => value === true || value === "true");
 
+const stringList = z
+  .string()
+  .default("")
+  .transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_NAME: z.string().min(1).default("EnergyCFO Meetings Bot"),
@@ -45,6 +50,7 @@ const envSchema = z.object({
   GOOGLE_ADMIN_ACCOUNT: z.string().email().default("koval.tatyana.2502@gmail.com"),
   GOOGLE_CALENDAR_ID: z.string().min(1).default("replace_me"),
   GOOGLE_CALENDAR_NAME: z.string().min(1).default("Встречи с сайта CFO Energy Advisory"),
+  GOOGLE_FREEBUSY_CALENDAR_IDS: stringList,
 
   WORKING_DAYS: integerList.default([1, 2, 3, 4, 5]),
   WORKING_HOURS_START: z.string().regex(/^\d{2}:\d{2}$/).default("10:00"),
@@ -97,7 +103,8 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env) => {
       refreshToken: parsed.GOOGLE_REFRESH_TOKEN,
       adminAccount: parsed.GOOGLE_ADMIN_ACCOUNT,
       calendarId: parsed.GOOGLE_CALENDAR_ID,
-      calendarName: parsed.GOOGLE_CALENDAR_NAME
+      calendarName: parsed.GOOGLE_CALENDAR_NAME,
+      freebusyCalendarIds: parsed.GOOGLE_FREEBUSY_CALENDAR_IDS
     },
     scheduling: {
       workingDays: parsed.WORKING_DAYS,

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCalendarEventBody, extractMeetLink } from "../src/calendar/googleCalendar.js";
+import {
+  buildCalendarEventBody,
+  extractMeetLink,
+  getFreeBusyCalendarIds,
+  isGoogleCalendarConfigured
+} from "../src/calendar/googleCalendar.js";
+import { loadConfig } from "../src/config/env.js";
 
 describe("google calendar helpers", () => {
   it("builds a calendar event with attendee and Google Meet request", () => {
@@ -43,5 +49,38 @@ describe("google calendar helpers", () => {
         }
       })
     ).toBe("https://meet.google.com/test-link");
+  });
+
+  it("detects placeholder Google Calendar configuration", () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: "replace_me",
+      TELEGRAM_ADMIN_ID: "replace_me",
+      DATABASE_URL: "postgresql://user:password@localhost:5432/db",
+      GOOGLE_CLIENT_ID: "replace_me",
+      GOOGLE_CLIENT_SECRET: "replace_me",
+      GOOGLE_REFRESH_TOKEN: "replace_me",
+      GOOGLE_CALENDAR_ID: "replace_me"
+    });
+
+    expect(isGoogleCalendarConfigured(config)).toBe(false);
+  });
+
+  it("uses primary, meetings and extra calendars for freebusy", () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: "replace_me",
+      TELEGRAM_ADMIN_ID: "replace_me",
+      DATABASE_URL: "postgresql://user:password@localhost:5432/db",
+      GOOGLE_CLIENT_ID: "client-id",
+      GOOGLE_CLIENT_SECRET: "client-secret",
+      GOOGLE_REFRESH_TOKEN: "refresh-token",
+      GOOGLE_CALENDAR_ID: "meetings-calendar-id",
+      GOOGLE_FREEBUSY_CALENDAR_IDS: "tatyana.koval.2502@gmail.com, meetings-calendar-id"
+    });
+
+    expect(getFreeBusyCalendarIds(config)).toEqual([
+      "primary",
+      "meetings-calendar-id",
+      "tatyana.koval.2502@gmail.com"
+    ]);
   });
 });
