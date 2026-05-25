@@ -1,5 +1,158 @@
-import type { AppConfig } from "../config/env.js";
+import { randomUUID } from "node:crypto";
+
+import { google, calendar_v3 } from "googleapis";
+
+import { isPlaceholderSecret, type AppConfig } from "../config/env.js";
+import { createGoogleOAuthClient } from "./googleOAuth.js";
 
 export type GoogleCalendarConfig = AppConfig["google"];
 
 export const getGoogleCalendarConfig = (config: AppConfig): GoogleCalendarConfig => config.google;
+
+export type CalendarMeetingRequest = {
+  id: string;
+  requestNumber: number;
+  topicText: string | null;
+  comment: string | null;
+  selectedStartAt: Date;
+  selectedEndAt: Date;
+  timezone: string;
+  user: {
+    fullName: string | null;
+    company: string | null;
+    position: string | null;
+    email: string | null;
+    telegramUsername: string | null;
+    telegramId: string;
+  };
+};
+
+export type CreatedCalendarEvent = {
+  calendarId: string;
+  eventId: string;
+  htmlLink: string | null;
+  meetLink: string | null;
+};
+
+const ensureGoogleCalendarConfigured = (config: AppConfig) => {
+  if (
+    isPlaceholderSecret(config.google.clientId) ||
+    isPlaceholderSecret(config.google.clientSecret) ||
+    isPlaceholderSecret(config.google.refreshToken) ||
+    isPlaceholderSecret(config.google.calendarId)
+  ) {
+    throw new Error("Google Calendar is not configured");
+  }
+};
+
+const createCalendarClient = (config: AppConfig) => {
+  ensureGoogleCalendarConfigured(config);
+
+  const auth = createGoogleOAuthClient(config);
+  auth.setCredentials({ refresh_token: config.google.refreshToken });
+
+  return google.calendar({ version: "v3", auth });
+};
+
+const getTelegramLabel = (request: CalendarMeetingRequest) =>
+  request.user.telegramUsername ? `@${request.user.telegramUsername}` : `ID ${request.user.telegramId}`;
+
+export const buildCalendarEventBody = (request: CalendarMeetingRequest): calendar_v3.Schema$Event => {
+  const attendee = request.user.email ? [{ email: request.user.email, displayName: request.user.fullName }] : [];
+
+  return {
+    summary: `EnergyCFO: ${request.topicText ?? "B2B-встреча"}`,
+    description: [
+      `Заявка #${request.requestNumber}`,
+      `Тема: ${request.topicText ?? "не указана"}`,
+      `ФИО: ${request.user.fullName ?? "не указано"}`,
+      `Компания: ${request.user.company ?? "не указана"}`,
+      `Должность: ${request.user.position ?? "не указана"}`,
+      `Email: ${request.user.email ?? "не указан"}`,
+      `Telegram: ${getTelegramLabel(request)}`,
+      "",
+      "Комментарий:",
+      request.comment ?? "не указан"
+    ].join("\n"),
+    start: {
+      dateTime: request.selectedStartAt.toISOString(),
+      timeZone: request.timezone
+    },
+    end: {
+      dateTime: request.selectedEndAt.toISOString(),
+      timeZone: request.timezone
+    },
+    attendees: attendee,
+    guestsCanInviteOthers: false,
+    guestsCanModify: false,
+    conferenceData: {
+      createRequest: {
+        requestId: `energycfo-${request.id}-${randomUUID()}`,
+        conferenceSolutionKey: {
+          type: "hangoutsMeet"
+        }
+      }
+    }
+  };
+};
+
+export const extractMeetLink = (event: calendar_v3.Schema$Event) =>
+  event.hangoutLink ??
+  event.conferenceData?.entryPoints?.find((entryPoint) => entryPoint.entryPointType === "video")?.uri ??
+  null;
+
+const wait = async (milliseconds: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+
+const getEventWithMeetLink = async (
+  calendar: calendar_v3.Calendar,
+  calendarId: string,
+  event: calendar_v3.Schema$Event
+) => {
+  if (!event.id || extractMeetLink(event)) {
+    return event;
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await wait(1000);
+
+    const response = await calendar.events.get({
+      calendarId,
+      eventId: event.id
+    });
+    const refreshedEvent = response.data;
+
+    if (extractMeetLink(refreshedEvent)) {
+      return refreshedEvent;
+    }
+  }
+
+  return event;
+};
+
+export const createCalendarMeetingEvent = async (
+  config: AppConfig,
+  request: CalendarMeetingRequest
+): Promise<CreatedCalendarEvent> => {
+  const calendar = createCalendarClient(config);
+  const response = await calendar.events.insert({
+    calendarId: config.google.calendarId,
+    conferenceDataVersion: 1,
+    sendUpdates: "all",
+    requestBody: buildCalendarEventBody(request)
+  });
+  const event = await getEventWithMeetLink(calendar, config.google.calendarId, response.data);
+
+  if (!event.id) {
+    throw new Error("Google Calendar did not return event id");
+  }
+
+  return {
+    calendarId: config.google.calendarId,
+    eventId: event.id,
+    htmlLink: event.htmlLink ?? null,
+    meetLink: extractMeetLink(event)
+  };
+};

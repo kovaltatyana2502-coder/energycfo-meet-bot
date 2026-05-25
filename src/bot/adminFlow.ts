@@ -15,6 +15,7 @@ import {
   adminRequestListKeyboard,
   declineReasonKeyboard
 } from "./keyboards.js";
+import { createCalendarMeetingEvent } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
 import { formatSlotRange } from "../scheduling/availability.js";
@@ -264,8 +265,66 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
 
     const selectedStartAt = request.selectedStartAt;
     const selectedEndAt = request.selectedEndAt;
+    let calendarEvent;
+
+    try {
+      calendarEvent = await createCalendarMeetingEvent(config, {
+        id: request.id,
+        requestNumber: request.requestNumber,
+        topicText: request.topicText,
+        comment: request.comment,
+        selectedStartAt,
+        selectedEndAt,
+        timezone: request.timezone,
+        user: {
+          fullName: request.user.fullName,
+          company: request.user.company,
+          position: request.user.position,
+          email: request.user.email,
+          telegramUsername: request.user.telegramUsername,
+          telegramId: request.user.telegramId
+        }
+      });
+    } catch (error) {
+      logger.error({ error, requestId: request.id }, "Failed to create Google Calendar event");
+      await reply(
+        ctx,
+        [
+          `Не удалось создать событие в Google Calendar по заявке #${requestNumber}.`,
+          "",
+          "Заявка не потеряна и остается в статусе «Ожидает согласования». Проверьте интеграцию с календарем или повторите действие позже."
+        ].join("\n"),
+        adminRequestActionsKeyboard(requestNumber)
+      );
+      return;
+    }
 
     const approvedRequest = await prisma.$transaction(async (tx) => {
+      await tx.meeting.upsert({
+        where: { meetingRequestId: request.id },
+        update: {
+          status: MeetingStatus.SCHEDULED,
+          startAt: selectedStartAt,
+          endAt: selectedEndAt,
+          timezone: request.timezone,
+          googleCalendarId: calendarEvent.calendarId,
+          googleEventId: calendarEvent.eventId,
+          googleMeetLink: calendarEvent.meetLink,
+          cancelledAt: null
+        },
+        create: {
+          meetingRequestId: request.id,
+          userId: request.userId,
+          status: MeetingStatus.SCHEDULED,
+          startAt: selectedStartAt,
+          endAt: selectedEndAt,
+          timezone: request.timezone,
+          googleCalendarId: calendarEvent.calendarId,
+          googleEventId: calendarEvent.eventId,
+          googleMeetLink: calendarEvent.meetLink
+        }
+      });
+
       const updatedRequest = await tx.meetingRequest.update({
         where: { id: request.id },
         data: {
@@ -276,25 +335,6 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
           user: true,
           contactPreferences: true,
           meeting: true
-        }
-      });
-
-      await tx.meeting.upsert({
-        where: { meetingRequestId: request.id },
-        update: {
-          status: MeetingStatus.SCHEDULED,
-          startAt: selectedStartAt,
-          endAt: selectedEndAt,
-          timezone: request.timezone,
-          cancelledAt: null
-        },
-        create: {
-          meetingRequestId: request.id,
-          userId: request.userId,
-          status: MeetingStatus.SCHEDULED,
-          startAt: selectedStartAt,
-          endAt: selectedEndAt,
-          timezone: request.timezone
         }
       });
 
@@ -319,8 +359,10 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
         "Ваша встреча согласована.",
         "",
         `Дата и время: ${formatRequestTime(approvedRequest)}`,
+        `Формат: Google Meet`,
+        `Ссылка: ${calendarEvent.meetLink ?? "ссылка будет доступна в календарном приглашении"}`,
         "",
-        "Календарное приглашение и ссылка Google Meet будут отправлены после подключения Google Calendar."
+        `Календарное приглашение отправлено на email: ${approvedRequest.user.email ?? "не указан"}`
       ].join("\n")
     );
 
@@ -329,7 +371,8 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       [
         `Заявка #${requestNumber} согласована.`,
         "",
-        "Внутренняя встреча сохранена. Google Calendar будет подключен на следующем этапе."
+        "Событие создано в Google Calendar, пользователю отправлено уведомление.",
+        calendarEvent.meetLink ? `Google Meet: ${calendarEvent.meetLink}` : "Google Meet: ссылка будет доступна в событии календаря."
       ].join("\n"),
       adminMenuKeyboard()
     );
