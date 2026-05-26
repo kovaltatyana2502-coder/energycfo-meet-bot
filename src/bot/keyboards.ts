@@ -66,6 +66,23 @@ export const slotSelectionKeyboard = (slotLabels: string[]) =>
 export const bookingConfirmationKeyboard = () =>
   Markup.keyboard([["Отправить заявку"], ["Выбрать другое время"], ["Отменить"]]).resize();
 
+export const userMeetingsKeyboard = (requestNumbers: number[], isAdmin = false) => {
+  const rows = requestNumbers.flatMap((requestNumber) => [
+    [`Перенести встречу #${requestNumber}`],
+    [`Отменить встречу #${requestNumber}`]
+  ]);
+  const menuRows = [["Назначить встречу"], ["Мои встречи", "Помощь"]];
+
+  if (isAdmin) {
+    menuRows.push(["Админ-панель"]);
+  }
+
+  return Markup.keyboard([...rows, ...menuRows]).resize();
+};
+
+export const cancelMeetingConfirmationKeyboard = (requestNumber: number) =>
+  Markup.keyboard([[`Да, отменить #${requestNumber}`], ["Нет, оставить"]]).resize();
+
 export const adminRequestListKeyboard = (requestNumbers: number[]) =>
   Markup.keyboard([...toRows(requestNumbers.map((requestNumber) => `Заявка #${requestNumber}`), 2), ["Админ-панель"]]).resize();
 
@@ -75,6 +92,13 @@ export const adminRequestActionsKeyboard = (requestNumber: number) =>
     [`Отклонить #${requestNumber}`],
     [`Предложить другое время #${requestNumber}`],
     ["Новые заявки", "Админ-панель"]
+  ]).resize();
+
+export const adminRescheduleActionsKeyboard = (requestNumber: number) =>
+  Markup.keyboard([
+    [`Согласовать перенос #${requestNumber}`],
+    [`Отклонить перенос #${requestNumber}`],
+    ["Заявки на перенос", "Админ-панель"]
   ]).resize();
 
 export const declineReasonKeyboard = () =>

@@ -1,7 +1,13 @@
 import { ContactChannel, MeetingTopic } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { isValidEmail, normalizeText, parseContactChannel, parseTopicChoice } from "../src/bot/bookingFlow.js";
+import {
+  isValidEmail,
+  normalizeText,
+  parseContactChannel,
+  parseTopicChoice,
+  parseUserMeetingAction
+} from "../src/bot/bookingFlow.js";
 
 describe("booking flow helpers", () => {
   it("normalizes user text", () => {
@@ -24,5 +30,19 @@ describe("booking flow helpers", () => {
     expect(parseContactChannel("WhatsApp")).toBe(ContactChannel.WHATSAPP);
     expect(parseContactChannel("Телефон")).toBe(ContactChannel.PHONE);
   });
-});
 
+  it("parses user meeting lifecycle commands", () => {
+    expect(parseUserMeetingAction("Отменить встречу #12")).toEqual({
+      action: "cancel",
+      requestNumber: 12
+    });
+    expect(parseUserMeetingAction("Да, отменить #12")).toEqual({
+      action: "confirm_cancel",
+      requestNumber: 12
+    });
+    expect(parseUserMeetingAction("Перенести встречу #12")).toEqual({
+      action: "reschedule",
+      requestNumber: 12
+    });
+  });
+});

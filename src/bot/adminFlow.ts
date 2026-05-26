@@ -13,9 +13,10 @@ import {
   adminMenuKeyboard,
   adminRequestActionsKeyboard,
   adminRequestListKeyboard,
+  adminRescheduleActionsKeyboard,
   declineReasonKeyboard
 } from "./keyboards.js";
-import { createCalendarMeetingEvent } from "../calendar/googleCalendar.js";
+import { createCalendarMeetingEvent, updateCalendarMeetingEvent } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
 import { formatSlotRange } from "../scheduling/availability.js";
@@ -39,6 +40,17 @@ type AdminRequest = Prisma.MeetingRequestGetPayload<{
     user: true;
     contactPreferences: true;
     meeting: true;
+    replacesMeeting: {
+      include: {
+        meetingRequest: true;
+      };
+    };
+  };
+}>;
+
+type UserNotificationRequest = Prisma.MeetingRequestGetPayload<{
+  include: {
+    user: true;
   };
 }>;
 
@@ -59,7 +71,9 @@ const statusLabels: Record<MeetingRequestStatus, string> = {
 const actionPatterns: Array<[AdminAction, RegExp]> = [
   ["view", /^Заявка #(\d+)$/],
   ["approve", /^Согласовать #(\d+)$/],
+  ["approve", /^Согласовать перенос #(\d+)$/],
   ["decline", /^Отклонить #(\d+)$/],
+  ["decline", /^Отклонить перенос #(\d+)$/],
   ["alternative", /^Предложить другое время #(\d+)$/]
 ];
 
@@ -79,6 +93,9 @@ export const parseAdminRequestAction = (value: string): { action: AdminAction; r
 
   return null;
 };
+
+export const canDeclineRequestStatus = (status: MeetingRequestStatus) =>
+  status === MeetingRequestStatus.PENDING_APPROVAL || status === MeetingRequestStatus.RESCHEDULE_PENDING;
 
 const normalizeText = (value: string) => value.trim().replace(/\s+/g, " ");
 
@@ -103,13 +120,27 @@ const formatContactPreference = (request: AdminRequest) => {
   return `${contactPreference.channel}${contactPreference.value ? `: ${contactPreference.value}` : ""}`;
 };
 
-const formatRequestTime = (request: AdminRequest) =>
+type RequestTimeLike = {
+  selectedStartAt: Date | null;
+  selectedEndAt: Date | null;
+  timezone: string;
+};
+
+const formatRequestTime = (request: RequestTimeLike) =>
   request.selectedStartAt && request.selectedEndAt
     ? formatSlotRange(request.selectedStartAt, request.selectedEndAt, request.timezone)
     : "не выбрано";
 
-const buildRequestCard = (request: AdminRequest) =>
-  [
+const formatMeetingTime = (meeting: Pick<NonNullable<AdminRequest["replacesMeeting"]>, "startAt" | "endAt" | "timezone">) =>
+  formatSlotRange(meeting.startAt, meeting.endAt, meeting.timezone);
+
+const buildRequestCard = (request: AdminRequest) => {
+  const lifecycleLines =
+    request.kind === "RESCHEDULE" && request.replacesMeeting
+      ? [`Текущее время: ${formatMeetingTime(request.replacesMeeting)}`, `Новое время: ${formatRequestTime(request)}`]
+      : [`Дата и время: ${formatRequestTime(request)}`];
+
+  return [
     `Заявка #${request.requestNumber}`,
     `Статус: ${statusLabels[request.status]}`,
     `Тема: ${request.topicText ?? "не указана"}`,
@@ -119,9 +150,10 @@ const buildRequestCard = (request: AdminRequest) =>
     `Email: ${request.user.email ?? "не указан"}`,
     `Telegram: ${formatTelegramProfile(request)}`,
     `Способ связи: ${formatContactPreference(request)}`,
-    `Дата и время: ${formatRequestTime(request)}`,
+    ...lifecycleLines,
     `Комментарий: ${request.comment ?? "не указан"}`
   ].join("\n");
+};
 
 export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: PrismaClient) => {
   const isAdmin = (ctx: Context) => String(ctx.from?.id) === config.telegram.adminId;
@@ -153,7 +185,12 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       include: {
         user: true,
         contactPreferences: true,
-        meeting: true
+        meeting: true,
+        replacesMeeting: {
+          include: {
+            meetingRequest: true
+          }
+        }
       }
     });
 
@@ -195,6 +232,49 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
     );
   };
 
+  const showRescheduleRequests = async (ctx: Context) => {
+    if (!(await assertAdmin(ctx))) {
+      return;
+    }
+
+    const requests = await prisma.meetingRequest.findMany({
+      where: {
+        status: MeetingRequestStatus.RESCHEDULE_PENDING,
+        cancelledAt: null
+      },
+      include: {
+        user: true,
+        contactPreferences: true,
+        meeting: true,
+        replacesMeeting: {
+          include: {
+            meetingRequest: true
+          }
+        }
+      },
+      orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
+      take: 10
+    });
+
+    if (requests.length === 0) {
+      await reply(ctx, "Заявок на перенос нет.", adminMenuKeyboard());
+      return;
+    }
+
+    const lines = requests.flatMap((request) => [
+      `#${request.requestNumber} | ${request.user.fullName ?? "ФИО не указано"}`,
+      request.replacesMeeting ? `Текущее время: ${formatMeetingTime(request.replacesMeeting)}` : "Текущее время не найдено",
+      `Новое время: ${formatRequestTime(request)}`,
+      ""
+    ]);
+
+    await reply(
+      ctx,
+      ["Заявки на перенос:", "", ...lines, "Выберите заявку для просмотра."].join("\n").trim(),
+      adminRequestListKeyboard(requests.map((request) => request.requestNumber))
+    );
+  };
+
   const showRequest = async (ctx: Context, requestNumber: number) => {
     if (!(await assertAdmin(ctx))) {
       return;
@@ -207,13 +287,21 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
-    await reply(ctx, `${buildRequestCard(request)}\n\nВыберите действие.`, adminRequestActionsKeyboard(requestNumber));
+    await reply(
+      ctx,
+      `${buildRequestCard(request)}\n\nВыберите действие.`,
+      request.status === MeetingRequestStatus.RESCHEDULE_PENDING
+        ? adminRescheduleActionsKeyboard(requestNumber)
+        : adminRequestActionsKeyboard(requestNumber)
+    );
   };
 
-  const sendUserMessage = async (ctx: Context, request: AdminRequest, text: string) => {
-    const notificationType =
-      request.status === MeetingRequestStatus.DECLINED ? NotificationType.REQUEST_DECLINED : NotificationType.REQUEST_APPROVED;
-
+  const sendUserMessage = async (
+    ctx: Context,
+    request: UserNotificationRequest,
+    text: string,
+    notificationType: NotificationType
+  ) => {
     try {
       await ctx.telegram.sendMessage(request.user.telegramId, text);
       await prisma.notificationLog.create({
@@ -241,6 +329,147 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
     }
   };
 
+  const approveRescheduleRequest = async (ctx: Context, request: AdminRequest) => {
+    if (!ctx.from) {
+      return;
+    }
+
+    if (!request.selectedStartAt || !request.selectedEndAt || !request.replacesMeeting) {
+      await reply(ctx, `У заявки #${request.requestNumber} не хватает данных для переноса.`, adminMenuKeyboard());
+      return;
+    }
+
+    const meetingToReschedule = request.replacesMeeting;
+
+    if (!meetingToReschedule.googleCalendarId || !meetingToReschedule.googleEventId) {
+      await reply(
+        ctx,
+        `У встречи по заявке #${request.requestNumber} нет данных события Google Calendar. Перенос через бота невозможен.`,
+        adminMenuKeyboard()
+      );
+      return;
+    }
+
+    const selectedStartAt = request.selectedStartAt;
+    const selectedEndAt = request.selectedEndAt;
+    let calendarEvent;
+
+    try {
+      calendarEvent = await updateCalendarMeetingEvent(
+        config,
+        meetingToReschedule.googleCalendarId,
+        meetingToReschedule.googleEventId,
+        {
+          id: request.id,
+          requestNumber: request.requestNumber,
+          topicText: request.topicText,
+          comment: request.comment,
+          selectedStartAt,
+          selectedEndAt,
+          timezone: request.timezone,
+          user: {
+            fullName: request.user.fullName,
+            company: request.user.company,
+            position: request.user.position,
+            email: request.user.email,
+            telegramUsername: request.user.telegramUsername,
+            telegramId: request.user.telegramId
+          }
+        }
+      );
+    } catch (error) {
+      logger.error({ error, requestId: request.id }, "Failed to update Google Calendar event for reschedule");
+      await reply(
+        ctx,
+        [
+          `Не удалось обновить событие Google Calendar по заявке #${request.requestNumber}.`,
+          "",
+          "Перенос не согласован, старая встреча остается в силе."
+        ].join("\n"),
+        adminRescheduleActionsKeyboard(request.requestNumber)
+      );
+      return;
+    }
+
+    const approvedRequest = await prisma.$transaction(async (tx) => {
+      await tx.meeting.update({
+        where: { id: meetingToReschedule.id },
+        data: {
+          status: MeetingStatus.SCHEDULED,
+          startAt: selectedStartAt,
+          endAt: selectedEndAt,
+          timezone: request.timezone,
+          googleMeetLink: calendarEvent.meetLink ?? meetingToReschedule.googleMeetLink ?? null,
+          cancelledAt: null
+        }
+      });
+
+      await tx.meetingRequest.update({
+        where: { id: meetingToReschedule.meetingRequestId },
+        data: {
+          selectedStartAt,
+          selectedEndAt,
+          timezone: request.timezone
+        }
+      });
+
+      const updatedRequest = await tx.meetingRequest.update({
+        where: { id: request.id },
+        data: {
+          status: MeetingRequestStatus.RESCHEDULED,
+          approvedAt: new Date()
+        },
+        include: {
+          user: true,
+          contactPreferences: true,
+          meeting: true,
+          replacesMeeting: {
+            include: {
+              meetingRequest: true
+            }
+          }
+        }
+      });
+
+      await tx.statusHistory.create({
+        data: {
+          meetingRequestId: request.id,
+          oldStatus: request.status,
+          newStatus: MeetingRequestStatus.RESCHEDULED,
+          actorRole: ActorRole.ADMIN,
+          actorTelegramId: String(ctx.from?.id),
+          reason: "Администратор согласовал перенос встречи"
+        }
+      });
+
+      return updatedRequest;
+    });
+
+    await sendUserMessage(
+      ctx,
+      approvedRequest,
+      [
+        "Перенос встречи согласован.",
+        "",
+        `Новое время: ${formatRequestTime(approvedRequest)}`,
+        `Ссылка Google Meet: ${calendarEvent.meetLink ?? meetingToReschedule.googleMeetLink ?? "ссылка в календарном приглашении"}`,
+        "",
+        "Календарное событие обновлено."
+      ].join("\n"),
+      NotificationType.RESCHEDULE_APPROVED
+    );
+
+    await reply(
+      ctx,
+      [
+        `Перенос по заявке #${request.requestNumber} согласован.`,
+        "",
+        "Событие в Google Calendar обновлено."
+      ].join("\n"),
+      adminMenuKeyboard()
+    );
+  };
+
   const approveRequest = async (ctx: Context, requestNumber: number) => {
     if (!(await assertAdmin(ctx)) || !ctx.from) {
       return;
@@ -253,8 +482,13 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
+    if (request.status === MeetingRequestStatus.RESCHEDULE_PENDING) {
+      await approveRescheduleRequest(ctx, request);
+      return;
+    }
+
     if (request.status !== MeetingRequestStatus.PENDING_APPROVAL) {
-      await reply(ctx, `Заявка #${requestNumber} уже не ожидает согласования.`, adminMenuKeyboard());
+      await reply(ctx, `Заявка #${requestNumber} уже не ожидает решения.`, adminMenuKeyboard());
       return;
     }
 
@@ -363,7 +597,8 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
         `Ссылка: ${calendarEvent.meetLink ?? "ссылка будет доступна в календарном приглашении"}`,
         "",
         `Календарное приглашение отправлено на email: ${approvedRequest.user.email ?? "не указан"}`
-      ].join("\n")
+      ].join("\n"),
+      NotificationType.REQUEST_APPROVED
     );
 
     await reply(
@@ -390,8 +625,8 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
-    if (request.status !== MeetingRequestStatus.PENDING_APPROVAL) {
-      await reply(ctx, `Заявка #${requestNumber} уже не ожидает согласования.`, adminMenuKeyboard());
+    if (!canDeclineRequestStatus(request.status)) {
+      await reply(ctx, `Заявка #${requestNumber} уже не ожидает решения.`, adminMenuKeyboard());
       return;
     }
 
@@ -434,7 +669,12 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       include: {
         user: true,
         contactPreferences: true,
-        meeting: true
+        meeting: true,
+        replacesMeeting: {
+          include: {
+            meetingRequest: true
+          }
+        }
       }
     });
 
@@ -444,9 +684,9 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
-    if (request.status !== MeetingRequestStatus.PENDING_APPROVAL) {
+    if (!canDeclineRequestStatus(request.status)) {
       await prisma.botSession.deleteMany({ where: { telegramId: String(ctx.from.id) } });
-      await reply(ctx, `Заявка #${request.requestNumber} уже не ожидает согласования.`, adminMenuKeyboard());
+      await reply(ctx, `Заявка #${request.requestNumber} уже не ожидает решения.`, adminMenuKeyboard());
       return;
     }
 
@@ -481,21 +721,38 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return updatedRequest;
     });
 
+    const isRescheduleDecline = request.status === MeetingRequestStatus.RESCHEDULE_PENDING;
+    const userMessage = isRescheduleDecline
+      ? [
+          "Перенос встречи отклонен.",
+          "",
+          "Текущая встреча остается в силе:",
+          request.replacesMeeting ? formatMeetingTime(request.replacesMeeting) : "время встречи не найдено",
+          "",
+          `Причина: ${reason}`
+        ].join("\n")
+      : [
+          "Заявка на встречу отклонена.",
+          "",
+          `Причина: ${reason}`,
+          "",
+          "При необходимости вы можете создать новую заявку с другой темой или временем."
+        ].join("\n");
+
     await sendUserMessage(
       ctx,
       declinedRequest,
-      [
-        "Заявка на встречу отклонена.",
-        "",
-        `Причина: ${reason}`,
-        "",
-        "При необходимости вы можете создать новую заявку с другой темой или временем."
-      ].join("\n")
+      userMessage,
+      isRescheduleDecline ? NotificationType.RESCHEDULE_DECLINED : NotificationType.REQUEST_DECLINED
     );
 
     await reply(
       ctx,
-      [`Заявка #${request.requestNumber} отклонена.`, "", "Причина отправлена пользователю."].join("\n"),
+      isRescheduleDecline
+        ? [`Перенос по заявке #${request.requestNumber} отклонен.`, "", "Старая встреча остается действующей."].join(
+            "\n"
+          )
+        : [`Заявка #${request.requestNumber} отклонена.`, "", "Причина отправлена пользователю."].join("\n"),
       adminMenuKeyboard()
     );
   };
@@ -530,7 +787,7 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
 
     const lines = meetings.flatMap((meeting) => [
       `#${meeting.meetingRequest.requestNumber} | ${meeting.meetingRequest.user.fullName ?? "ФИО не указано"}`,
-      formatRequestTime(meeting.meetingRequest),
+      formatSlotRange(meeting.startAt, meeting.endAt, meeting.timezone),
       ""
     ]);
 
@@ -625,7 +882,12 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return true;
     }
 
-    if (text === "Заявки на перенос" || text === "Недоступные даты") {
+    if (text === "Заявки на перенос") {
+      await showRescheduleRequests(ctx);
+      return true;
+    }
+
+    if (text === "Недоступные даты") {
       await reply(ctx, "Этот раздел будет добавлен следующим подэтапом.", adminMenuKeyboard());
       return true;
     }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCalendarEventBody,
+  buildCalendarEventPatchBody,
   extractMeetLink,
   getFreeBusyCalendarIds,
   isGoogleCalendarConfigured
@@ -34,6 +35,30 @@ describe("google calendar helpers", () => {
     expect(body.attendees).toEqual([{ email: "user@example.com", displayName: "Тестовый Пользователь" }]);
     expect(body.conferenceData?.createRequest?.conferenceSolutionKey?.type).toBe("hangoutsMeet");
     expect(body.description).toContain("Заявка #15");
+  });
+
+  it("builds a calendar event patch without creating a new Meet link", () => {
+    const body = buildCalendarEventPatchBody({
+      id: "request-id",
+      requestNumber: 15,
+      topicText: "Перенос встречи",
+      comment: "Новое время",
+      selectedStartAt: new Date("2026-05-27T07:00:00.000Z"),
+      selectedEndAt: new Date("2026-05-27T08:00:00.000Z"),
+      timezone: "Europe/Moscow",
+      user: {
+        fullName: "Тестовый Пользователь",
+        company: "Тест Энерго",
+        position: "Финансовый директор",
+        email: "user@example.com",
+        telegramUsername: "test_user",
+        telegramId: "123"
+      }
+    });
+
+    expect(body.start?.dateTime).toBe("2026-05-27T07:00:00.000Z");
+    expect(body.end?.dateTime).toBe("2026-05-27T08:00:00.000Z");
+    expect(body.conferenceData).toBeUndefined();
   });
 
   it("extracts Google Meet link from event data", () => {

@@ -35,9 +35,24 @@ export type CreatedCalendarEvent = {
   meetLink: string | null;
 };
 
+export type UpdatedCalendarEvent = CreatedCalendarEvent;
+
+export type CancelCalendarEventResult = {
+  deleted: boolean;
+  notFound: boolean;
+};
+
 export type GoogleBusyRange = {
   timeMin: Date;
   timeMax: Date;
+};
+
+const getGoogleErrorStatus = (error: unknown) => {
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "number") {
+    return error.code;
+  }
+
+  return null;
 };
 
 const ensureGoogleCalendarConfigured = (config: AppConfig) => {
@@ -118,6 +133,12 @@ export const buildCalendarEventBody = (request: CalendarMeetingRequest): calenda
   };
 };
 
+export const buildCalendarEventPatchBody = (request: CalendarMeetingRequest): calendar_v3.Schema$Event => {
+  const { conferenceData: _conferenceData, ...eventBody } = buildCalendarEventBody(request);
+
+  return eventBody;
+};
+
 export const extractMeetLink = (event: calendar_v3.Schema$Event) =>
   event.hangoutLink ??
   event.conferenceData?.entryPoints?.find((entryPoint) => entryPoint.entryPointType === "video")?.uri ??
@@ -177,6 +198,62 @@ export const createCalendarMeetingEvent = async (
     htmlLink: event.htmlLink ?? null,
     meetLink: extractMeetLink(event)
   };
+};
+
+export const updateCalendarMeetingEvent = async (
+  config: AppConfig,
+  calendarId: string,
+  eventId: string,
+  request: CalendarMeetingRequest
+): Promise<UpdatedCalendarEvent> => {
+  const calendar = createCalendarClient(config);
+  const response = await calendar.events.patch({
+    calendarId,
+    eventId,
+    sendUpdates: "all",
+    requestBody: buildCalendarEventPatchBody(request)
+  });
+
+  if (!response.data.id) {
+    throw new Error("Google Calendar did not return event id");
+  }
+
+  return {
+    calendarId,
+    eventId: response.data.id,
+    htmlLink: response.data.htmlLink ?? null,
+    meetLink: extractMeetLink(response.data)
+  };
+};
+
+export const cancelCalendarMeetingEvent = async (
+  config: AppConfig,
+  calendarId: string,
+  eventId: string
+): Promise<CancelCalendarEventResult> => {
+  const calendar = createCalendarClient(config);
+
+  try {
+    await calendar.events.delete({
+      calendarId,
+      eventId,
+      sendUpdates: "all"
+    });
+
+    return {
+      deleted: true,
+      notFound: false
+    };
+  } catch (error) {
+    if (getGoogleErrorStatus(error) === 404) {
+      return {
+        deleted: false,
+        notFound: true
+      };
+    }
+
+    throw error;
+  }
 };
 
 export const getGoogleCalendarBusyIntervals = async (
