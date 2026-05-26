@@ -3,6 +3,8 @@ import "dotenv/config";
 import { createBot } from "./bot/bot.js";
 import { isPlaceholderSecret, loadConfig } from "./config/env.js";
 import { createLogger } from "./config/logger.js";
+import { prisma } from "./db/prisma.js";
+import { createBackgroundJobs } from "./jobs/index.js";
 import { createServer } from "./server/app.js";
 
 const config = loadConfig();
@@ -11,6 +13,7 @@ const logger = createLogger(config);
 const bot =
   isPlaceholderSecret(config.telegram.botToken) || config.telegram.runMode === "off" ? null : createBot(config, logger);
 const server = createServer({ config, logger, bot });
+const backgroundJobs = createBackgroundJobs({ config, logger, prisma, bot });
 let pollingStarted = false;
 
 const shutdown = async (signal: NodeJS.Signals) => {
@@ -24,7 +27,9 @@ const shutdown = async (signal: NodeJS.Signals) => {
     }
   }
 
+  backgroundJobs.stop();
   await server.close();
+  await prisma.$disconnect();
   process.exit(0);
 };
 
@@ -46,6 +51,8 @@ try {
 
     pollingStarted = true;
   }
+
+  backgroundJobs.start();
 
   logger.info(
     {

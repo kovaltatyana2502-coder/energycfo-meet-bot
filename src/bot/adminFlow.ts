@@ -1,5 +1,6 @@
 import {
   ActorRole,
+  MeetingRequestKind,
   MeetingRequestStatus,
   MeetingStatus,
   NotificationStatus,
@@ -95,7 +96,17 @@ export const parseAdminRequestAction = (value: string): { action: AdminAction; r
 };
 
 export const canDeclineRequestStatus = (status: MeetingRequestStatus) =>
-  status === MeetingRequestStatus.PENDING_APPROVAL || status === MeetingRequestStatus.RESCHEDULE_PENDING;
+  status === MeetingRequestStatus.PENDING_APPROVAL ||
+  status === MeetingRequestStatus.RESCHEDULE_PENDING ||
+  status === MeetingRequestStatus.SLA_OVERDUE;
+
+export const canApproveInitialRequest = (request: Pick<AdminRequest, "kind" | "status">) =>
+  request.kind !== MeetingRequestKind.RESCHEDULE &&
+  (request.status === MeetingRequestStatus.PENDING_APPROVAL || request.status === MeetingRequestStatus.SLA_OVERDUE);
+
+export const canApproveRescheduleRequest = (request: Pick<AdminRequest, "kind" | "status">) =>
+  request.kind === MeetingRequestKind.RESCHEDULE &&
+  (request.status === MeetingRequestStatus.RESCHEDULE_PENDING || request.status === MeetingRequestStatus.SLA_OVERDUE);
 
 const normalizeText = (value: string) => value.trim().replace(/\s+/g, " ");
 
@@ -201,7 +212,8 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
 
     const requests = await prisma.meetingRequest.findMany({
       where: {
-        status: MeetingRequestStatus.PENDING_APPROVAL,
+        kind: MeetingRequestKind.INITIAL,
+        status: { in: [MeetingRequestStatus.PENDING_APPROVAL, MeetingRequestStatus.SLA_OVERDUE] },
         cancelledAt: null
       },
       include: {
@@ -239,7 +251,8 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
 
     const requests = await prisma.meetingRequest.findMany({
       where: {
-        status: MeetingRequestStatus.RESCHEDULE_PENDING,
+        kind: MeetingRequestKind.RESCHEDULE,
+        status: { in: [MeetingRequestStatus.RESCHEDULE_PENDING, MeetingRequestStatus.SLA_OVERDUE] },
         cancelledAt: null
       },
       include: {
@@ -290,7 +303,7 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
     await reply(
       ctx,
       `${buildRequestCard(request)}\n\nВыберите действие.`,
-      request.status === MeetingRequestStatus.RESCHEDULE_PENDING
+      canApproveRescheduleRequest(request)
         ? adminRescheduleActionsKeyboard(requestNumber)
         : adminRequestActionsKeyboard(requestNumber)
     );
@@ -482,12 +495,12 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
-    if (request.status === MeetingRequestStatus.RESCHEDULE_PENDING) {
+    if (canApproveRescheduleRequest(request)) {
       await approveRescheduleRequest(ctx, request);
       return;
     }
 
-    if (request.status !== MeetingRequestStatus.PENDING_APPROVAL) {
+    if (!canApproveInitialRequest(request)) {
       await reply(ctx, `Заявка #${requestNumber} уже не ожидает решения.`, adminMenuKeyboard());
       return;
     }
@@ -721,7 +734,7 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return updatedRequest;
     });
 
-    const isRescheduleDecline = request.status === MeetingRequestStatus.RESCHEDULE_PENDING;
+    const isRescheduleDecline = request.kind === MeetingRequestKind.RESCHEDULE;
     const userMessage = isRescheduleDecline
       ? [
           "Перенос встречи отклонен.",

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { MeetingRequestStatus } from "@prisma/client";
+import { MeetingRequestKind, MeetingRequestStatus } from "@prisma/client";
 
-import { canDeclineRequestStatus, parseAdminRequestAction } from "../src/bot/adminFlow.js";
+import {
+  canApproveInitialRequest,
+  canApproveRescheduleRequest,
+  canDeclineRequestStatus,
+  parseAdminRequestAction
+} from "../src/bot/adminFlow.js";
 
 describe("admin flow helpers", () => {
   it("parses request card commands", () => {
@@ -37,9 +42,22 @@ describe("admin flow helpers", () => {
     expect(parseAdminRequestAction("Новые заявки")).toBeNull();
   });
 
-  it("allows decline for initial and reschedule pending requests", () => {
+  it("allows decline for pending and SLA overdue requests", () => {
     expect(canDeclineRequestStatus(MeetingRequestStatus.PENDING_APPROVAL)).toBe(true);
     expect(canDeclineRequestStatus(MeetingRequestStatus.RESCHEDULE_PENDING)).toBe(true);
+    expect(canDeclineRequestStatus(MeetingRequestStatus.SLA_OVERDUE)).toBe(true);
     expect(canDeclineRequestStatus(MeetingRequestStatus.APPROVED)).toBe(false);
+  });
+
+  it("allows approving SLA overdue initial and reschedule requests", () => {
+    expect(canApproveInitialRequest({ kind: MeetingRequestKind.INITIAL, status: MeetingRequestStatus.SLA_OVERDUE })).toBe(
+      true
+    );
+    expect(
+      canApproveRescheduleRequest({ kind: MeetingRequestKind.RESCHEDULE, status: MeetingRequestStatus.SLA_OVERDUE })
+    ).toBe(true);
+    expect(
+      canApproveRescheduleRequest({ kind: MeetingRequestKind.INITIAL, status: MeetingRequestStatus.SLA_OVERDUE })
+    ).toBe(false);
   });
 });
