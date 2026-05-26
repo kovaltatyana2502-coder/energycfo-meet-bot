@@ -17,6 +17,7 @@ import {
   adminRescheduleActionsKeyboard,
   declineReasonKeyboard
 } from "./keyboards.js";
+import { buildAdminStatsReport, getAdminStats } from "../analytics/index.js";
 import { createCalendarMeetingEvent, updateCalendarMeetingEvent } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
@@ -842,23 +843,11 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
       return;
     }
 
-    const [startedCount, submittedCount, approvedCount, declinedCount] = await Promise.all([
-      prisma.meetingRequest.count(),
-      prisma.meetingRequest.count({ where: { submittedAt: { not: null } } }),
-      prisma.meetingRequest.count({ where: { status: MeetingRequestStatus.APPROVED } }),
-      prisma.meetingRequest.count({ where: { status: MeetingRequestStatus.DECLINED } })
-    ]);
+    const stats = await getAdminStats(prisma);
 
     await reply(
       ctx,
-      [
-        "Статистика за весь период:",
-        "",
-        `Начатые заявки: ${startedCount}`,
-        `Отправленные заявки: ${submittedCount}`,
-        `Согласованные встречи: ${approvedCount}`,
-        `Отказы: ${declinedCount}`
-      ].join("\n"),
+      buildAdminStatsReport(stats),
       adminMenuKeyboard()
     );
   };
