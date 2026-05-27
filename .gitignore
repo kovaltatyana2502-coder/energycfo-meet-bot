@@ -11,6 +11,9 @@ coverage/
 logs/
 *.log
 backups/
+*.dump
+*.sql
+*.backup
 
 .DS_Store
 Thumbs.db

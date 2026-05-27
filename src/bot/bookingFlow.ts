@@ -28,6 +28,7 @@ import {
 import { cancelCalendarMeetingEvent } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
+import { recordTechnicalError } from "../operations/index.js";
 import {
   dateKeyFromUtc,
   formatDateLabel,
@@ -653,7 +654,26 @@ export const createBookingFlow = (config: AppConfig, logger: AppLogger, prisma: 
       try {
         calendarDeleteResult = await cancelCalendarMeetingEvent(config, meeting.googleCalendarId, meeting.googleEventId);
       } catch (error) {
-        logger.error({ error, meetingId: meeting.id }, "Failed to cancel Google Calendar event");
+        await recordTechnicalError(
+          {
+            config,
+            logger,
+            prisma,
+            telegram: ctx.telegram
+          },
+          {
+            module: "calendar",
+            action: "cancel_event",
+            message: `Failed to cancel Google Calendar event for meeting ${meeting.id}`,
+            error,
+            meetingRequestId: meeting.meetingRequestId,
+            metadata: {
+              meetingId: meeting.id,
+              requestNumber: meeting.meetingRequest.requestNumber
+            },
+            dedupeKey: `calendar:cancel-event:${meeting.id}`
+          }
+        );
         await reply(
           ctx,
           [

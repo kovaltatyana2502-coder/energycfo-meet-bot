@@ -21,6 +21,7 @@ import { buildAdminStatsReport, getAdminStats } from "../analytics/index.js";
 import { createCalendarMeetingEvent, updateCalendarMeetingEvent } from "../calendar/googleCalendar.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
+import { recordTechnicalError } from "../operations/index.js";
 import { formatSlotRange } from "../scheduling/availability.js";
 
 type ReplyMarkup = ReturnType<typeof Markup.keyboard>;
@@ -392,7 +393,25 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
         }
       );
     } catch (error) {
-      logger.error({ error, requestId: request.id }, "Failed to update Google Calendar event for reschedule");
+      await recordTechnicalError(
+        {
+          config,
+          logger,
+          prisma,
+          telegram: ctx.telegram
+        },
+        {
+          module: "calendar",
+          action: "update_event_for_reschedule",
+          message: `Failed to update Google Calendar event for request #${request.requestNumber}`,
+          error,
+          meetingRequestId: request.id,
+          metadata: {
+            requestNumber: request.requestNumber
+          },
+          dedupeKey: `calendar:update-event:${request.id}`
+        }
+      );
       await reply(
         ctx,
         [
@@ -534,7 +553,25 @@ export const createAdminFlow = (config: AppConfig, logger: AppLogger, prisma: Pr
         }
       });
     } catch (error) {
-      logger.error({ error, requestId: request.id }, "Failed to create Google Calendar event");
+      await recordTechnicalError(
+        {
+          config,
+          logger,
+          prisma,
+          telegram: ctx.telegram
+        },
+        {
+          module: "calendar",
+          action: "create_event",
+          message: `Failed to create Google Calendar event for request #${requestNumber}`,
+          error,
+          meetingRequestId: request.id,
+          metadata: {
+            requestNumber
+          },
+          dedupeKey: `calendar:create-event:${request.id}`
+        }
+      );
       await reply(
         ctx,
         [

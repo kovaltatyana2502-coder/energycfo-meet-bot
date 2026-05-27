@@ -14,6 +14,7 @@ import {
 import type { EnergyCfoBot } from "../bot/bot.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
+import { recordTechnicalError, runOperationsChecksOnce, type OperationsCheckStats } from "../operations/index.js";
 import { formatSlotRange } from "../scheduling/availability.js";
 
 type BackgroundJobsOptions = {
@@ -38,6 +39,7 @@ type JobRunStats = {
   autoCancelledRequests: number;
   userReminders: number;
   completedMeetings: number;
+  operations: OperationsCheckStats | null;
 };
 
 const pendingDecisionStatuses = [
@@ -432,13 +434,23 @@ export const runBackgroundJobsOnce = async (options: BackgroundJobsOptions, now 
     adminReminders: 0,
     autoCancelledRequests: 0,
     userReminders: 0,
-    completedMeetings: 0
+    completedMeetings: 0,
+    operations: null
   };
 
   stats.autoCancelledRequests = await autoCancelUnresolvedRequests(options, now);
   stats.adminReminders = await sendAdminDecisionReminders(options, now);
   stats.userReminders = await sendUserMeetingReminders(options, now);
   stats.completedMeetings = await completePastMeetings(options, now);
+  stats.operations = await runOperationsChecksOnce(
+    {
+      config: options.config,
+      logger: options.logger,
+      prisma: options.prisma,
+      telegram: options.bot?.telegram ?? null
+    },
+    now
+  );
 
   await options.prisma.systemLog.create({
     data: {
@@ -469,15 +481,21 @@ export const createBackgroundJobs = (options: BackgroundJobsOptions) => {
       const stats = await runBackgroundJobsOnce(options);
       options.logger.info({ stats }, "Background jobs run completed");
     } catch (error) {
-      options.logger.error({ error }, "Background jobs run failed");
-      await options.prisma.systemLog.create({
-        data: {
-          level: SystemLogLevel.ERROR,
+      await recordTechnicalError(
+        {
+          config: options.config,
+          logger: options.logger,
+          prisma: options.prisma,
+          telegram: options.bot?.telegram ?? null
+        },
+        {
           module: "jobs",
           action: "background_jobs_run",
-          message: error instanceof Error ? error.message : "Unknown background jobs error"
+          message: "Background jobs run failed",
+          error,
+          dedupeKey: `jobs:background-run-failed:${new Date().toISOString().slice(0, 10)}`
         }
-      });
+      );
     } finally {
       running = false;
     }

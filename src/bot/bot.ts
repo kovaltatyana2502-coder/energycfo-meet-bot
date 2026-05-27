@@ -7,6 +7,7 @@ import { messages } from "./messages.js";
 import type { AppConfig } from "../config/env.js";
 import type { AppLogger } from "../config/logger.js";
 import { prisma } from "../db/prisma.js";
+import { recordTechnicalError } from "../operations/index.js";
 
 export const createBot = (config: AppConfig, logger: AppLogger) => {
   const bot = new Telegraf(config.telegram.botToken);
@@ -39,14 +40,24 @@ export const createBot = (config: AppConfig, logger: AppLogger) => {
     }
   });
 
-  bot.catch((error, ctx) => {
-    logger.error(
+  bot.catch(async (error, ctx) => {
+    await recordTechnicalError(
       {
-        error,
-        updateType: ctx.updateType,
-        userId: ctx.from?.id
+        config,
+        logger,
+        prisma,
+        telegram: bot.telegram
       },
-      "Telegram bot handler failed"
+      {
+        module: "telegram",
+        action: "handler_failed",
+        message: "Telegram bot handler failed",
+        error,
+        metadata: {
+          updateType: ctx.updateType,
+          userId: ctx.from?.id ? String(ctx.from.id) : null
+        }
+      }
     );
   });
 
